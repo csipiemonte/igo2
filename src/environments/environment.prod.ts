@@ -2,7 +2,8 @@ import { LanguageOptions } from '@igo2/core';
 import {
   SearchSourceOptions,
   ImportExportServiceOptions,
-  Projection
+  Projection,
+  SpatialFilterOptions
 } from '@igo2/geo';
 
 interface Environment {
@@ -12,6 +13,7 @@ interface Environment {
     language?: LanguageOptions;
     searchSources?: { [key: string]: SearchSourceOptions };
     projections?: Projection[];
+    spatialFilter?: SpatialFilterOptions;
   };
 }
 
@@ -35,7 +37,7 @@ export const environment: Environment = {
         searchUrl: '/apis/icherche',
         order: 2,
         params: {
-          limit: '8'
+          limit: '5'
         }
       },
       coordinatesreverse: {
@@ -54,6 +56,9 @@ export const environment: Environment = {
           limit: '5'
         }
       }
+    },
+    spatialFilter: {
+      url: '/apis/terrapi/'
     },
     projections: [
       {
