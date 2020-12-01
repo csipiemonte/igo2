@@ -4,7 +4,8 @@
       "projection": "EPSG:3857",
       "center": [-71.938087, 48.446975],
       "zoom": 6,
-      "maxZoom": 19
+      "maxZoom": 19,
+      "maxZoomOnExtent": 17
     }
   },
   "layers": [
@@ -32,6 +33,81 @@
       }
     },
     {
+      "title": "Hybride automobile",
+      "baseLayer": true,
+      "visible": true,
+      "linkedLayers": {
+        "linkId": "HybrideAuto",
+        "links": [{
+          "bidirectionnal": true,
+          "syncedDelete": true,
+          "linkedIds": ["bgr_v_sous_route_res_sup_act"],
+          "properties": ["visible"]
+        }]
+      },
+      "sourceOptions": {
+        "url": "https://geoegl.msp.gouv.qc.ca/apis/carto/tms/1.0.0/orthos@EPSG_3857/{z}/{x}/{-y}.jpeg",
+        "attributions": "© <a href='http://www.droitauteur.gouv.qc.ca/copyright.php' target='_blank'><img src='/gouvouvert/public/images/quebec/gouv_qc_logo.png' width='64' height='14'>Gouvernement du Québec</a> / <a href='http://www.igouverte.org/' target='_blank'>IGO2</a>",
+        "type": "xyz",
+        "maxZoom": 19,
+        "crossOrigin": "anonymous"
+      }
+    },
+    {
+      "title": "bgr_v_sous_route_res_sup_act",
+      "opacity": 0.5,
+      "showInLayerList": false,
+      "linkedLayers": {
+        "linkId": "bgr_v_sous_route_res_sup_act"
+      },
+      "sourceOptions": {
+        "type": "wms",
+        "queryable": true,
+        "url": "/swtq",
+        "params": {
+          "layers": "bgr_v_sous_route_res_sup_act"
+        }
+      }
+    },
+    {
+      "title": "Hybride vélo",
+      "baseLayer": true,
+      "visible": false,
+      "linkedLayers": {
+        "linkId": "HybrideVelo",
+        "links": [{
+          "bidirectionnal": true,
+          "syncedDelete": true,
+          "linkedIds": ["convi_velo_glv"],
+          "properties": ["visible"]
+        }]
+      },
+      "sourceOptions": {
+        "url": "https://geoegl.msp.gouv.qc.ca/apis/carto/tms/1.0.0/orthos@EPSG_3857/{z}/{x}/{-y}.jpeg",
+        "attributions": "© <a href='http://www.droitauteur.gouv.qc.ca/copyright.php' target='_blank'><img src='/gouvouvert/public/images/quebec/gouv_qc_logo.png' width='64' height='14'>Gouvernement du Québec</a> / <a href='http://www.igouverte.org/' target='_blank'>IGO2</a>",
+        "type": "xyz",
+        "maxZoom": 19,
+        "crossOrigin": "anonymous"
+      }
+    },
+    {
+      "title": "convi_velo_glv",
+      "opacity": 0.5,
+      "showInLayerList": false,
+      "linkedLayers": {
+        "linkId": "convi_velo_glv"
+      },
+      "sourceOptions": {
+        "type": "wms",
+        "url": "/swtq",
+        "params": {
+          "layers": "convi_velo_glv"
+        }
+      }
+    },
+
+
+    {
       "title": "Aucun",
       "baseLayer": true,
       "visible": false,
@@ -45,7 +121,7 @@
     {
       "id": "carte_gouv_qc",
       "title": "Carte Topo",
-      "visible": true,
+      "visible": false,
       "baseLayer": true,
       "sourceOptions": {
         "url": "https://geoegl.msp.gouv.qc.ca/apis/carto/tms/1.0.0/carte_gouv_qc_ro@EPSG_3857/{z}/{x}/{-y}.png",
@@ -71,9 +147,9 @@
   "toolbar": [
     "searchResults",
     "contextManager",
-    "mapDetails",
-    "measurer",
+    "mapTools",
     "spatialFilter",
+    "measurer",
     "directions",
     "catalog",
     "importExport",
@@ -83,10 +159,7 @@
   ],
   "tools": [
     {
-      "name": "searchResults",
-      "options": {
-        "focusFirst": false
-      }
+      "name": "searchResults"
     },
     {
       "name": "contextManager"
@@ -95,9 +168,13 @@
       "name": "about"
     },
     {
-      "name": "mapDetails",
+      "name": "mapTools",
       "options": {
-        "toggleLegendOnVisibilityChange": true,
+        "selectedTabAtOpening": "",
+        "allowShowAllLegends": true,
+        "layerAdditionAllowed": true,
+        "toggleLegendOnVisibilityChange": false,
+        "updateLegendOnResolutionChange": false,
         "layerListControls": {
           "excludeBaseLayers": true
         }
@@ -128,7 +205,34 @@
       "name": "ogcFilter"
     },
     {
-      "name": "importExport"
+      "name": "activeTimeFilter"
+    },
+    {
+      "name": "activeOgcFilter"
+    },
+    {
+      "name": "importExport",
+      "options": {
+        "selectFirstProj": false,
+        "projectionsLimitations": {
+          "projFromConfig": true,
+          "nad83": true,
+          "wgs84": true,
+          "webMercator": true,
+          "utm": true,
+          "mtm": true,
+          "utmZone": {
+            "minZone": 17,
+            "maxZone": 21
+          },
+          "mtmZone": {
+            "minZone": 3,
+            "maxZone": 10
+          }
+        },
+        "importExportType": "layer",
+        "importExportShowBothType": true
+      }
     },
     {
       "name": "print"

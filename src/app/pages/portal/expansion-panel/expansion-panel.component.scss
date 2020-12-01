@@ -23,6 +23,19 @@
 :host.app-expansion-panel-expanded {
   height: $app-expansion-panel-height;
   width: 100%;
+  z-index: 6;
+
+  @include mobile {
+    &.footer {
+      margin-bottom: 48px;
+    }
+  }
+}
+
+:host.app-expansion-panel-expanded-maximized {
+  height: $app-expansion-panel-height-maximized;
+  width: 100%;
+  z-index: 6;
 
   @include mobile {
     &.footer {
@@ -43,7 +56,8 @@
 }
 
 igo-backdrop ::ng-deep > div {
-  z-index: initial !important;
+  // 120 because material tables use z-index = 110 for sticky headers 
+  z-index: 120 !important;
 }
 
 .app-expansion-panel-content ::ng-deep .igo-entity-table-with-selection {

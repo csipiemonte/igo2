@@ -14,9 +14,25 @@
   {
     "uri": "ogcFilters",
     "title": "Filtre attributaire (Attribute filter)"
+  },  
+  {
+    "uri": "layerSync",
+    "title": "Synchronisation de layers"
+  },
+  {
+    "uri": "workspace",
+    "title": "Workspace (vue tabulaire)"
   },
   {
     "uri": "mapOverlay",
     "title": "Superposition de carte (Map overlay)"
+  },
+  {
+    "uri": "testExport",
+    "title": "Test export"
+  },
+  {
+    "uri": "variousFormats",
+    "title": "Divers format à titre d'exemple"
   }
 ]

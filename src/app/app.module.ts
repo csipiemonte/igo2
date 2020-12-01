@@ -1,4 +1,4 @@
-import { BrowserModule } from '@angular/platform-browser';
+import { BrowserModule, HammerModule } from '@angular/platform-browser';
 import { NgModule } from '@angular/core';
 import { RouterModule } from '@angular/router';
 import { BrowserAnimationsModule } from '@angular/platform-browser/animations';
@@ -18,7 +18,9 @@ import {
   provideCoordinatesReverseSearchSource,
   provideILayerSearchSource,
   provideStoredQueriesSearchSource,
-  provideOsrmRoutingSource
+  provideOsrmDirectionsSource,
+  provideOptionsApi,
+  provideCadastreSearchSource
 } from '@igo2/geo';
 
 import { environment } from '../environments/environment';
@@ -36,7 +38,8 @@ import { AppComponent } from './app.component';
     IgoMessageModule,
     IgoSpinnerModule,
     IgoStopPropagationModule,
-    PortalModule
+    PortalModule,
+    HammerModule
   ],
   providers: [
     provideConfigOptions({
@@ -50,7 +53,9 @@ import { AppComponent } from './app.component';
     provideCoordinatesReverseSearchSource(),
     provideILayerSearchSource(),
     provideStoredQueriesSearchSource(),
-    provideOsrmRoutingSource()
+    provideOsrmDirectionsSource(),
+    provideOptionsApi(),
+    provideCadastreSearchSource()
   ],
   bootstrap: [AppComponent]
 })

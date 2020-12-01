@@ -9,17 +9,24 @@ import {
 interface Environment {
   production: boolean;
   igo: {
+    app: {
+      forceCoordsNA: boolean;
+    };
     catalog?: CatalogServiceOptions;
     importExport?: ImportExportServiceOptions;
     language?: LanguageOptions;
     searchSources?: { [key: string]: SearchSourceOptions };
     projections?: Projection[];
+    interactiveTour?: { tourInMobile: boolean; pathToConfigFile: string };
   };
 }
 
 export const environment: Environment = {
   production: true,
   igo: {
+    app: {
+      forceCoordsNA: false
+    },
     catalog: {
       sources: [
         {
@@ -30,7 +37,8 @@ export const environment: Environment = {
         {
           id: 'glace',
           title: 'Carte de glace',
-          url: 'https://geoegl.msp.gouv.qc.ca/apis/ws/radarsat.fcgi'
+          url: 'https://geoegl.msp.gouv.qc.ca/apis/ws/radarsat.fcgi',
+          showLegend: true
         }
       ]
     },
@@ -39,6 +47,10 @@ export const environment: Environment = {
     },
     language: {
       prefix: './locale/'
+    },
+    interactiveTour: {
+      tourInMobile: true,
+      pathToConfigFile: './config/interactiveTour.json'
     },
     searchSources: {
       nominatim: {
@@ -69,6 +81,9 @@ export const environment: Environment = {
         params: {
           limit: '5'
         }
+      },
+      cadastre: {
+        enabled: false
       }
     },
     projections: [

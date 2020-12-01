@@ -2,6 +2,7 @@ import { LanguageOptions } from '@igo2/core';
 import {
   SearchSourceOptions,
   ImportExportServiceOptions,
+  OptionsApiOptions,
   Projection,
   SpatialFilterOptions
 } from '@igo2/geo';
@@ -9,22 +10,34 @@ import {
 interface Environment {
   production: boolean;
   igo: {
+    app: {
+      forceCoordsNA: boolean;
+    };
     importExport?: ImportExportServiceOptions;
     language?: LanguageOptions;
     searchSources?: { [key: string]: SearchSourceOptions };
+    optionsApi?: OptionsApiOptions;
     projections?: Projection[];
     spatialFilter?: SpatialFilterOptions;
+    interactiveTour?: { tourInMobile: boolean; pathToConfigFile: string };
   };
 }
 
 export const environment: Environment = {
   production: true,
   igo: {
+    app: {
+      forceCoordsNA: true
+    },
     importExport: {
       url: '/apis/ogre'
     },
     language: {
       prefix: './locale/'
+    },
+    interactiveTour: {
+      tourInMobile: true,
+      pathToConfigFile: './config/interactiveTour.json'
     },
     searchSources: {
       nominatim: {
@@ -55,7 +68,13 @@ export const environment: Environment = {
         params: {
           limit: '5'
         }
+      },
+      cadastre: {
+        enabled: false
       }
+    },
+    optionsApi: {
+      url: '/apis/igo2/layers/options'
     },
     spatialFilter: {
       url: '/apis/terrapi/'

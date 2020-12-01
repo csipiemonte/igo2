@@ -7,9 +7,9 @@ import {
   ElementRef
 } from '@angular/core';
 import { ActivatedRoute, Params } from '@angular/router';
-import { Subscription, of, BehaviorSubject } from 'rxjs';
-import { debounceTime } from 'rxjs/operators';
-
+import { Subscription, of, BehaviorSubject, combineLatest } from 'rxjs';
+import { debounceTime, take, pairwise, skipWhile, mergeMap, map, concatMap, tap } from 'rxjs/operators';
+import { MatDialog, MatDialogConfig } from '@angular/material/dialog';
 import { MapBrowserPointerEvent as OlMapBrowserPointerEvent } from 'ol/MapBrowserEvent';
 import * as olProj from 'ol/proj';
 
@@ -17,18 +17,22 @@ import {
   MediaService,
   Media,
   MediaOrientation,
-  ConfigService
+  ConfigService,
+  LanguageService,
+  MessageService,
+  StorageService
 } from '@igo2/core';
 import {
-  // ActionbarMode,
-  // Workspace,
-  // WorkspaceStore,
-  // EntityRecord,
+  ActionbarMode,
+  Workspace,
+  WorkspaceStore,
   ActionStore,
   EntityStore,
   // getEntityTitle,
   Toolbox,
-  Tool
+  Tool,
+  Widget,
+  EntityTablePaginatorOptions
 } from '@igo2/common';
 import { AuthService } from '@igo2/auth';
 import { DetailedContext } from '@igo2/context';
@@ -43,13 +47,22 @@ import {
   Research,
   SearchResult,
   SearchSource,
-  SearchService,
   SearchSourceService,
   CapabilitiesService,
   sourceCanSearch,
   sourceCanReverseSearch,
   generateWMSIdFromSourceOptions,
-  WMSDataSourceOptions
+  generateWMTSIdFromSourceOptions,
+  WMSDataSourceOptions,
+  WMTSDataSourceOptions,
+  FEATURE,
+  ImportService,
+  handleFileImportError,
+  handleFileImportSuccess,
+  featureFromOl,
+  QueryService,
+  WfsWorkspace,
+  FeatureWorkspace
 } from '@igo2/geo';
 
 import {
@@ -57,19 +70,24 @@ import {
   MapState,
   SearchState,
   QueryState,
-  ContextState
+  ContextState,
+  WorkspaceState
 } from '@igo2/integration';
 
 import {
   expansionPanelAnimation,
   toastPanelAnimation,
-  baselayersAnimation,
   controlsAnimations,
   controlSlideX,
   controlSlideY,
   mapSlideX,
   mapSlideY
 } from './portal.animation';
+import { HttpClient } from '@angular/common/http';
+
+import { WelcomeWindowComponent } from './welcome-window/welcome-window.component';
+import { WelcomeWindowService } from './welcome-window/welcome-window.service';
+import { MatPaginator } from '@angular/material/paginator';
 
 @Component({
   selector: 'app-portal',
@@ -78,7 +96,6 @@ import {
   animations: [
     expansionPanelAnimation(),
     toastPanelAnimation(),
-    baselayersAnimation(),
     controlsAnimations(),
     controlSlideX(),
     controlSlideY(),
@@ -89,20 +106,30 @@ import {
 export class PortalComponent implements OnInit, OnDestroy {
   public minSearchTermLength = 2;
   public hasExpansionPanel = false;
-  public expansionPanelExpanded = false;
-  public toastPanelOpened = true;
+  public hasGeolocateButton = true;
+  public hasFeatureEmphasisOnSelection: Boolean = false;
+  public workspaceNotAvailableMessage: String = 'workspace.disabled.resolution';
+  public workspacePaginator: MatPaginator;
+  public workspaceEntitySortChange$: BehaviorSubject<
+    boolean
+  > = new BehaviorSubject(false);
+  public paginatorOptions: EntityTablePaginatorOptions = {
+    pageSize: 50, // Number of items to display on a page.
+    pageSizeOptions: [1, 5, 10, 20, 50, 100, 500] // The set of provided page size options to display to the user.
+  };
+  public workspaceMenuClass = 'workspace-menu';
+
+  public fullExtent = this.storageService.get('fullExtent') as boolean;
+  private workspaceMaximize$$: Subscription[] = [];
+  readonly workspaceMaximize$: BehaviorSubject<boolean> = new BehaviorSubject(
+    this.storageService.get('workspaceMaximize') as boolean
+  );
   public sidenavOpened = false;
   public searchBarTerm = '';
   public onSettingsChange$ = new BehaviorSubject<boolean>(undefined);
   public termDefinedInUrl = false;
   private addedLayers$$: Subscription[] = [];
-  private selectFirst: boolean;
-  private selectFirstSearchResult: boolean;
-  private selectFirstSearchResult$: BehaviorSubject<
-    boolean
-  > = new BehaviorSubject(true);
-  private selectFirstSearchResult$$: Subscription;
-  public zoomAuto = false;
+  public forceCoordsNA = false;
 
   public contextMenuStore = new ActionStore([]);
   private contextMenuCoord: [number, number];
@@ -110,35 +137,39 @@ export class PortalComponent implements OnInit, OnDestroy {
   private contextLoaded = false;
 
   private context$$: Subscription;
+  private openSidenav$$: Subscription;
 
   public igoSearchPointerSummaryEnabled = false;
 
-  public tableStore = new EntityStore([]);
-  public tableTemplate = {
-    selection: true,
-    sort: true,
-    columns: [
-      {
-        name: 'id',
-        title: 'ID'
-      },
-      {
-        name: 'name',
-        title: 'Name'
-      },
-      {
-        name: 'description',
-        title: 'Description'
-      }
-    ]
-  };
+  public toastPanelForExpansionOpened = true;
+  private activeWidget$$: Subscription;
+  public showToastPanelForExpansionToggle = false;
+  public selectedWorkspace$: BehaviorSubject<Workspace> = new BehaviorSubject(
+    undefined
+  );
+  private menuButtonReverseColor = false;
 
-  @ViewChild('mapBrowser', { read: ElementRef }) mapBrowser: ElementRef;
-  @ViewChild('searchBar', { read: ElementRef }) searchBar: ElementRef;
+  @ViewChild('mapBrowser', { read: ElementRef, static: true })
+  mapBrowser: ElementRef;
+  @ViewChild('searchBar', { read: ElementRef, static: true })
+  searchBar: ElementRef;
 
   get map(): IgoMap {
     return this.mapState.map;
   }
+
+  get toastPanelOpened(): boolean {
+    return this._toastPanelOpened;
+  }
+  set toastPanelOpened(value: boolean) {
+    if (value !== !this._toastPanelOpened) {
+      return;
+    }
+    this._toastPanelOpened = value;
+    this.cdRef.detectChanges();
+  }
+  private _toastPanelOpened =
+    (this.storageService.get('toastOpened') as boolean) !== false;
 
   isMobile(): boolean {
     return this.mediaService.getMedia() === Media.Mobile;
@@ -163,26 +194,28 @@ export class PortalComponent implements OnInit, OnDestroy {
     );
   }
 
+  get expansionPanelExpanded(): boolean {
+    return this.workspaceState.workspacePanelExpanded;
+  }
+  set expansionPanelExpanded(value: boolean) {
+    this.workspaceState.workspacePanelExpanded = value;
+  }
+
   get toastPanelShown(): boolean {
     return true;
   }
 
   get expansionPanelBackdropShown(): boolean {
-    return false;
+    return this.expansionPanelExpanded && this.toastPanelForExpansionOpened;
   }
 
-  // get actionbarMode(): ActionbarMode {
-  //   if (this.mediaService.media$.value === Media.Mobile) {
-  //     return ActionbarMode.Overlay;
-  //   }
-  //   return this.expansionPanelExpanded
-  //     ? ActionbarMode.Dock
-  //     : ActionbarMode.Overlay;
-  // }
-  //
-  // get actionbarWithTitle(): boolean {
-  //   return this.actionbarMode === ActionbarMode.Overlay;
-  // }
+  get actionbarMode(): ActionbarMode {
+    return ActionbarMode.Overlay;
+  }
+
+  get actionbarWithTitle(): boolean {
+    return this.actionbarMode === ActionbarMode.Overlay;
+  }
 
   get searchStore(): EntityStore<SearchResult> {
     return this.searchState.store;
@@ -196,15 +229,15 @@ export class PortalComponent implements OnInit, OnDestroy {
     return this.toolState.toolbox;
   }
 
-  // get toastPanelContent(): string {
-  //   let content;
-  //   if (this.workspace !== undefined && this.workspace.hasWidget) {
-  //     content = 'workspace';
-  //   } else if (this.searchResult !== undefined) {
-  //     content = this.searchResult.meta.dataType.toLowerCase();
-  //   }
-  //   return content;
-  // }
+  get toastPanelContent(): string {
+    let content;
+    if (this.workspace !== undefined && this.workspace.hasWidget) {
+      content = 'workspace';
+    } /*else if (this.searchResult !== undefined) {
+      content = this.searchResult.meta.dataType.toLowerCase();
+    }*/
+    return content;
+  }
 
   // get toastPanelTitle(): string {
   //   let title;
@@ -217,29 +250,17 @@ export class PortalComponent implements OnInit, OnDestroy {
   //   return title;
   // }
 
-  // get toastPanelOpened(): boolean {
-  //   const content = this.toastPanelContent;
-  //   if (content === 'workspace') {
-  //     return true;
-  //   }
-  //   return this._toastPanelOpened;
-  // }
-  // set toastPanelOpened(value: boolean) {
-  //   this._toastPanelOpened = value;
-  // }
-  // private _toastPanelOpened = false;
+  get workspaceStore(): WorkspaceStore {
+    return this.workspaceState.store;
+  }
 
-  // get workspaceStore(): WorkspaceStore {
-  //   return this.workspaceState.store;
-  // }
-  //
-  // get workspace(): Workspace {
-  //   return this.workspaceState.workspace$.value;
-  // }
+  get workspace(): Workspace {
+    return this.workspaceState.workspace$.value;
+  }
 
   constructor(
     private route: ActivatedRoute,
-    // private workspaceState: WorkspaceState,
+    public workspaceState: WorkspaceState,
     public authService: AuthService,
     public mediaService: MediaService,
     public layerService: LayerService,
@@ -252,18 +273,44 @@ export class PortalComponent implements OnInit, OnDestroy {
     private queryState: QueryState,
     private toolState: ToolState,
     private searchSourceService: SearchSourceService,
-    private searchService: SearchService,
-    private configService: ConfigService
+    private configService: ConfigService,
+    private importService: ImportService,
+    private http: HttpClient,
+    private languageService: LanguageService,
+    private messageService: MessageService,
+    private welcomeWindowService: WelcomeWindowService,
+    public dialogWindow: MatDialog,
+    private queryService: QueryService,
+    private storageService: StorageService
   ) {
     this.hasExpansionPanel = this.configService.getConfig('hasExpansionPanel');
+    this.hasGeolocateButton =
+    this.configService.getConfig('hasGeolocateButton') === undefined ? true : this.configService.getConfig('hasGeolocateButton') ;
+    this.forceCoordsNA = this.configService.getConfig('app.forceCoordsNA');
+    this.hasFeatureEmphasisOnSelection = this.configService.getConfig(
+      'hasFeatureEmphasisOnSelection'
+    );
+    this.igoSearchPointerSummaryEnabled = this.configService.getConfig(
+      'hasSearchPointerSummary'
+    );
+    if (
+      typeof this.configService.getConfig('menuButtonReverseColor') !==
+      'undefined'
+    ) {
+      this.menuButtonReverseColor = this.configService.getConfig(
+        'menuButtonReverseColor'
+      );
+    }
   }
 
   ngOnInit() {
     window['IGO'] = this;
 
-    this.authService.authenticate$.subscribe(
-      () => (this.contextLoaded = false)
-    );
+    this.initWelcomeWindow();
+
+    this.authService.authenticate$.subscribe((authenticated) => {
+      this.contextLoaded = false;
+    });
 
     this.context$$ = this.contextState.context$.subscribe(
       (context: DetailedContext) => this.onChangeContext(context)
@@ -287,26 +334,175 @@ export class PortalComponent implements OnInit, OnDestroy {
       }
     ]);
 
-    this.tableStore.load([
-      { id: '2', name: 'Name 2', description: 'Description 2' },
-      { id: '1', name: 'Name 1', description: 'Description 1' },
-      { id: '3', name: 'Name 3', description: 'Description 3' },
-      { id: '4', name: 'Name 4', description: 'Description 4' },
-      { id: '5', name: 'Name 5', description: 'Description 5' }
-    ]);
-
-    this.queryStore.count$.subscribe(i => {
-      this.map.viewController.padding[2] = i ? 280 : 0;
-    });
+    this.queryStore.count$
+      .pipe(pairwise())
+      .subscribe(([prevCnt, currentCnt]) => {
+        this.map.viewController.padding[2] = currentCnt ? 280 : 0;
+        // on mobile. Close the toast if workspace is opened, on new query
+        if (
+          prevCnt === 0 &&
+          currentCnt !== prevCnt &&
+          this.isMobile() &&
+          this.hasExpansionPanel &&
+          this.expansionPanelExpanded &&
+          this.toastPanelOpened
+        ) {
+          this.toastPanelOpened = false;
+        }
+      });
     this.readQueryParams();
 
     this.onSettingsChange$.subscribe(() => {
       this.searchState.setSearchSettingsChange();
-    })
+    });
+
+    this.searchState.selectedResult$.subscribe((result) => {
+      if (result && this.isMobile()) {
+        this.closeSidenav();
+      }
+    });
+
+    this.workspaceState.workspaceEnabled$.next(this.hasExpansionPanel);
+    this.workspaceState.store.empty$.subscribe((workspaceEmpty) => {
+      if (!this.hasExpansionPanel) {
+        return;
+      }
+      this.workspaceState.workspaceEnabled$.next(workspaceEmpty ? false : true);
+      if (workspaceEmpty) {
+        this.expansionPanelExpanded = false;
+      }
+      this.updateMapBrowserClass();
+    });
+
+    this.workspaceMaximize$$.push(this.workspaceState.workspaceMaximize$.subscribe((workspaceMaximize) => {
+      this.workspaceMaximize$.next(workspaceMaximize);
+      this.updateMapBrowserClass();
+    }));
+    this.workspaceMaximize$$.push(
+      this.workspaceMaximize$.subscribe(() => this.updateMapBrowserClass())
+    );
+
+    this.workspaceState.workspace$.subscribe((activeWks: WfsWorkspace | FeatureWorkspace) => {
+      if (activeWks) {
+        this.selectedWorkspace$.next(activeWks);
+        this.expansionPanelExpanded = true;
+      } else {
+        this.expansionPanelExpanded = false;
+      }
+    });
+
+    this.activeWidget$$ = this.workspaceState.activeWorkspaceWidget$.subscribe(
+      (widget: Widget) => {
+        if (widget !== undefined) {
+          this.openToastPanelForExpansion();
+          this.showToastPanelForExpansionToggle = true;
+        } else {
+          this.closeToastPanelForExpansion();
+          this.showToastPanelForExpansionToggle = false;
+        }
+      }
+    );
+
+    this.openSidenav$$ = this.toolState.openSidenav$.subscribe(
+      (openSidenav: boolean) => {
+        if (openSidenav) {
+          this.openSidenav();
+          this.toolState.openSidenav$.next(false);
+        }
+      }
+    );
+  }
+
+  getClassMenuButton() {
+    if (this.sidenavOpened) {
+      return {
+        'menu-button': this.menuButtonReverseColor === false,
+        'menu-button-reverse-color': this.menuButtonReverseColor === true
+      };
+    } else {
+      return {
+        'menu-button': this.menuButtonReverseColor === false,
+        'menu-button-reverse-color-close ': this.menuButtonReverseColor === true
+      };
+    }
+  }
+
+  workspaceVisibility(): boolean {
+    const wks = (this.selectedWorkspace$.value as WfsWorkspace | FeatureWorkspace);
+    if (wks.inResolutionRange$.value) {
+      if (wks.entityStore.empty$.value && !wks.layer.visible) {
+        this.workspaceNotAvailableMessage = 'workspace.disabled.visible';
+      } else {
+        this.workspaceNotAvailableMessage = '';
+      }
+    } else {
+      this.workspaceNotAvailableMessage = 'workspace.disabled.resolution';
+    }
+    return wks.inResolutionRange$.value;
+  }
+
+
+  paginatorChange(matPaginator: MatPaginator) {
+    this.workspacePaginator = matPaginator;
+  }
+
+  entitySortChange() {
+    this.workspaceEntitySortChange$.next(true);
+  }
+
+  entitySelectChange(result: { added: Feature[] }) {
+    const baseQuerySearchSource = this.getQuerySearchSource();
+    const querySearchSourceArray: QuerySearchSource[] = [];
+    if (result && result.added) {
+      const results = result.added.map((res) => {
+        if (
+          res &&
+          res.ol &&
+          res.ol.getProperties()._featureStore.layer &&
+          res.ol.getProperties()._featureStore.layer.visible
+        ) {
+          const featureStoreLayer = res.ol.getProperties()._featureStore.layer;
+          const feature = featureFromOl(
+            res.ol,
+            featureStoreLayer.map.projection,
+            featureStoreLayer.ol
+          );
+
+          feature.meta.alias = this.queryService.getAllowedFieldsAndAlias(
+            featureStoreLayer
+          );
+          feature.meta.title =
+            this.queryService.getQueryTitle(feature, featureStoreLayer) ||
+            feature.meta.title;
+          let querySearchSource = querySearchSourceArray.find(
+            (s) => s.title === feature.meta.sourceTitle
+          );
+          if (!querySearchSource) {
+            querySearchSource = new QuerySearchSource({
+              title: feature.meta.sourceTitle
+            });
+            querySearchSourceArray.push(querySearchSource);
+          }
+          return featureToSearchResult(feature, querySearchSource);
+        }
+      });
+
+      const research = {
+        request: of(results),
+        reverse: false,
+        source: baseQuerySearchSource
+      };
+      research.request.subscribe((queryResults: SearchResult<Feature>[]) => {
+        this.queryStore.load(queryResults);
+      });
+    }
   }
 
   ngOnDestroy() {
     this.context$$.unsubscribe();
+    this.activeWidget$$.unsubscribe();
+    this.openSidenav$$.unsubscribe();
+    this.workspaceMaximize$$.map(f => f.unsubscribe());
   }
 
   /**
@@ -325,13 +521,25 @@ export class PortalComponent implements OnInit, OnDestroy {
     this.toggleSidenav();
   }
 
+  onDeactivateWorkspaceWidget() {
+    this.closeToastPanelForExpansion();
+  }
+
+  closeToastPanelForExpansion() {
+    this.toastPanelForExpansionOpened = false;
+  }
+
+  openToastPanelForExpansion() {
+    this.toastPanelForExpansionOpened = true;
+  }
+
   onMapQuery(event: { features: Feature[]; event: OlMapBrowserPointerEvent }) {
     const baseQuerySearchSource = this.getQuerySearchSource();
     const querySearchSourceArray: QuerySearchSource[] = [];
 
     const results = event.features.map((feature: Feature) => {
       let querySearchSource = querySearchSourceArray.find(
-        s => s.title === feature.meta.sourceTitle
+        (s) => s.title === feature.meta.sourceTitle
       );
       if (!querySearchSource) {
         querySearchSource = new QuerySearchSource({
@@ -358,12 +566,6 @@ export class PortalComponent implements OnInit, OnDestroy {
     if (termWithoutHashtag.length < 2) {
       this.onClearSearch();
       return;
-    }
-    this.selectFirstSearchResult =
-      this.selectFirstSearchResult === undefined ? true : false;
-    this.selectFirstSearchResult$.next(this.selectFirstSearchResult);
-    if (!this.selectFirstSearchResult) {
-      this.selectFirstSearchResult$$.unsubscribe();
     }
     this.onBeforeSearch();
   }
@@ -392,7 +594,6 @@ export class PortalComponent implements OnInit, OnDestroy {
       )
       .concat(results);
     this.searchStore.load(newResults);
-    this.selectFirstSearchResult$.next(this.selectFirstSearchResult$.value);
   }
 
   onSearchSettingsChange() {
@@ -425,14 +626,32 @@ export class PortalComponent implements OnInit, OnDestroy {
       return;
     }
 
-    this.route.queryParams.pipe(debounceTime(250)).subscribe(params => {
+    this.route.queryParams.pipe(debounceTime(250)).subscribe((params) => {
       if (!params['context'] || params['context'] === context.uri) {
         this.readLayersQueryParams(params);
       }
     });
 
     if (this.contextLoaded) {
-      this.toolbox.activateTool('mapDetails');
+      const contextManager = this.toolbox.getTool('contextManager');
+      const contextManagerOptions = contextManager
+        ? contextManager.options
+        : {};
+      let toolToOpen = contextManagerOptions.toolToOpenOnContextChange;
+
+      if (!toolToOpen) {
+        const toolOrderToOpen = ['mapTools', 'map', 'mapDetails', 'mapLegend'];
+        for (const toolName of toolOrderToOpen) {
+          if (this.toolbox.getTool(toolName)) {
+            toolToOpen = toolName;
+            break;
+          }
+        }
+      }
+
+      if (toolToOpen) {
+        this.toolbox.activateTool(toolToOpen);
+      }
     }
 
     this.contextLoaded = true;
@@ -450,12 +669,30 @@ export class PortalComponent implements OnInit, OnDestroy {
 
   toastOpenedChange(opened: boolean) {
     this.map.viewController.padding[2] = opened ? 280 : 0;
+    this.handleExpansionAndToastOnMobile();
     this.toastPanelOpened = opened;
   }
 
+  private handleExpansionAndToastOnMobile() {
+    if (
+      this.isMobile() &&
+      this.hasExpansionPanel &&
+      this.expansionPanelExpanded &&
+      this.toastPanelOpened
+    ) {
+      this.expansionPanelExpanded = false;
+    }
+  }
+
   public onClearSearch() {
+    this.map.overlay.removeFeatures(
+      this.searchStore
+        .all()
+        .filter((f) => f.meta.dataType === FEATURE)
+        .map((f) => f.data as Feature)
+    );
     this.searchStore.clear();
-    this.map.overlay.clear();
+    this.searchState.setSelectedResult(undefined);
   }
 
   private getQuerySearchSource(): SearchSource {
@@ -490,7 +727,7 @@ export class PortalComponent implements OnInit, OnDestroy {
   }
 
   private openGoogleMaps(coord: [number, number]) {
-    window.open(GoogleLinks.getGoogleMapsLink(coord[0], coord[1]));
+    window.open(GoogleLinks.getGoogleMapsCoordLink(coord[0], coord[1]));
   }
 
   private openGoogleStreetView(coord: [number, number]) {
@@ -498,39 +735,51 @@ export class PortalComponent implements OnInit, OnDestroy {
   }
 
   searchCoordinate(coord: [number, number]) {
-    this.searchBarTerm = coord.map(c => c.toFixed(6)).join(', ');
+    this.searchBarTerm = coord.map((c) => c.toFixed(6)).join(', ');
   }
 
-  updateMapBrowserClass(e) {
+  updateMapBrowserClass() {
     const header = this.queryState.store.entities$.value.length > 0;
-    if (this.hasExpansionPanel) {
-      e.element.classList.add('has-expansion-panel');
+    if (this.hasExpansionPanel && this.workspaceState.workspaceEnabled$.value) {
+      this.mapBrowser.nativeElement.classList.add('has-expansion-panel');
     } else {
-      e.element.classList.remove('has-expansion-panel');
+      this.mapBrowser.nativeElement.classList.remove('has-expansion-panel');
     }
 
-    if (this.expansionPanelExpanded) {
-      e.element.classList.add('expansion-offset');
+    if (this.hasExpansionPanel && this.expansionPanelExpanded) {
+      if (this.workspaceMaximize$.value) {
+        this.mapBrowser.nativeElement.classList.add('expansion-offset-maximized');
+        this.mapBrowser.nativeElement.classList.remove('expansion-offset');
+      } else {
+        this.mapBrowser.nativeElement.classList.add('expansion-offset');
+        this.mapBrowser.nativeElement.classList.remove('expansion-offset-maximized');
+      }
     } else {
-      e.element.classList.remove('expansion-offset');
+      if (this.workspaceMaximize$.value) {
+        this.mapBrowser.nativeElement.classList.remove('expansion-offset-maximized');
+      } else {
+        this.mapBrowser.nativeElement.classList.remove('expansion-offset');
+      }
     }
 
     if (this.sidenavOpened) {
-      e.element.classList.add('sidenav-offset');
+      this.mapBrowser.nativeElement.classList.add('sidenav-offset');
     } else {
-      e.element.classList.remove('sidenav-offset');
+      this.mapBrowser.nativeElement.classList.remove('sidenav-offset');
     }
 
     if (this.sidenavOpened && !this.isMobile()) {
-      e.element.classList.add('sidenav-offset-baselayers');
+      this.mapBrowser.nativeElement.classList.add('sidenav-offset-baselayers');
     } else {
-      e.element.classList.remove('sidenav-offset-baselayers');
+      this.mapBrowser.nativeElement.classList.remove(
+        'sidenav-offset-baselayers'
+      );
     }
 
     if (!this.toastPanelOpened && header && !this.expansionPanelExpanded) {
-      e.element.classList.add('toast-offset-scale-line');
+      this.mapBrowser.nativeElement.classList.add('toast-offset-scale-line');
     } else {
-      e.element.classList.remove('toast-offset-scale-line');
+      this.mapBrowser.nativeElement.classList.remove('toast-offset-scale-line');
     }
 
     if (
@@ -539,9 +788,27 @@ export class PortalComponent implements OnInit, OnDestroy {
       (this.isMobile() || this.isTablet() || this.sidenavOpened) &&
       !this.expansionPanelExpanded
     ) {
-      e.element.classList.add('toast-offset-attribution');
+      this.mapBrowser.nativeElement.classList.add('toast-offset-attribution');
     } else {
-      e.element.classList.remove('toast-offset-attribution');
+      this.mapBrowser.nativeElement.classList.remove(
+        'toast-offset-attribution'
+      );
+    }
+  }
+
+  getExtent() {
+    if (!this.sidenavOpened) {
+      if (this.fullExtent) {
+        return 'fullStandard';
+      } else {
+        return 'standard';
+      }
+    } else if (this.sidenavOpened) {
+      if (this.fullExtent) {
+        return 'fullOffsetX';
+      } else {
+        return 'standardOffsetX';
+      }
     }
   }
 
@@ -571,31 +838,26 @@ export class PortalComponent implements OnInit, OnDestroy {
     }
   }
 
-  getExpansionToastPanelStatus() {
-    if (this.expansionPanelExpanded === true) {
-      if (this.toastPanelOpened === true) {
-        return 'down';
-      }
-      if (this.toastPanelOpened === false) {
-        if (this.queryState.store.entities$.value.length > 0) {
-          return 'down';
+  getToastPanelOffsetY() {
+    let status = 'noExpansion';
+    if (this.expansionPanelExpanded) {
+      if (this.workspaceMaximize$.value) {
+        if (this.toastPanelOpened) {
+          status = 'expansionMaximizedAndToastOpened';
+        } else {
+          status = 'expansionMaximizedAndToastClosed';
         }
-        return 'up';
-      }
-      return 'up';
-    }
-    if (this.expansionPanelExpanded === false) {
-      if (this.toastPanelOpened === true) {
-        return 'down';
-      }
-      if (this.toastPanelOpened === false) {
-        if (this.queryState.store.entities$.value.length > 0) {
-          return 'up';
+      } else {
+        if (this.toastPanelOpened) {
+          status = 'expansionAndToastOpened';
+        } else {
+          status = 'expansionAndToastClosed';
         }
-        return 'down';
       }
-      return 'down';
+    } else {
+      status = 'noExpansion';
     }
+    return status;
   }
 
   getToastPanelStatus() {
@@ -609,67 +871,83 @@ export class PortalComponent implements OnInit, OnDestroy {
       }
     }
   }
+  getControlsOffsetY() {
+    return this.expansionPanelExpanded ? this.workspaceMaximize$.value ? 'firstRowFromBottom-expanded-maximized' : 'firstRowFromBottom-expanded' : 'firstRowFromBottom';
+  }
 
   getBaselayersSwitcherStatus() {
+    let status;
     if (this.isMobile()) {
-      if (this.hasExpansionPanel === true) {
-        if (this.toastPanelOpened === false) {
-          if (this.expansionPanelExpanded === false) {
-            if (this.queryState.store.entities$.value.length > 0) {
-              return 'up';
-            }
-            return 'down';
-          }
-          return 'down';
+
+      if (this.workspaceState.workspaceEnabled$.value) {
+        if (this.expansionPanelExpanded === false) {
+          if (this.queryState.store.entities$.value.length === 0) {
+            status = 'secondRowFromBottom';
+           } else {
+            status =  'thirdRowFromBottom';
+           }
+        } else {
+          if (this.queryState.store.entities$.value.length === 0) {
+            status = 'firstRowFromBottom-expanded';
+           } else {
+            status =  'secondRowFromBottom-expanded';
+           }
         }
-        return 'down';
+
+      } else {
+        if (this.queryState.store.entities$.value.length === 0) {
+          status =  'firstRowFromBottom';
+         } else {
+          status =  'secondRowFromBottom';
+         }
       }
-      if (this.hasExpansionPanel === false) {
-        if (this.toastPanelOpened === false) {
-          if (this.queryState.store.entities$.value.length > 0) {
-            return 'down';
+    } else {
+      if (this.workspaceState.workspaceEnabled$.value) {
+        if (this.expansionPanelExpanded) {
+          if (this.workspaceMaximize$.value) {
+            status = 'firstRowFromBottom-expanded-maximized';
+          } else {
+            status = 'firstRowFromBottom-expanded';
           }
+        } else {
+          status = 'secondRowFromBottom';
         }
+      } else {
+        status = 'firstRowFromBottom';
       }
     }
+    return status;
   }
 
   private readQueryParams() {
-    this.route.queryParams.pipe(debounceTime(250)).subscribe(params => {
-      this.readLayersQueryParams(params);
+    this.route.queryParams.pipe(debounceTime(250)).subscribe((params) => {
       this.readToolParams(params);
       this.readSearchParams(params);
       this.readFocusFirst(params);
-      this.selectFirstSearchResult$$ = this.selectFirstSearchResult$.subscribe(
-        value => {
-          if (value) {
-            this.computeFocusFirst();
-          }
-        }
-      );
     });
   }
 
   private computeFocusFirst() {
-    if (this.selectFirst && this.termDefinedInUrl) {
-      const entities = this.searchStore.entities$.value;
-      if (entities.length === 0) {
-        return;
+    setTimeout(() => {
+      const resultItem: any = document
+        .getElementsByTagName('igo-search-results-item')
+        .item(0);
+      if (resultItem) {
+        resultItem.click();
       }
-      const higherDisplayOrder = Math.min(
-        ...entities.map(a => a.source.displayOrder)
-      );
-      this.searchStore.state.update(
-        entities.filter(v => v.source.displayOrder === higherDisplayOrder)[0],
-        { selected: true }
-      );
-    }
+    }, 1);
   }
 
   private readFocusFirst(params: Params) {
-    this.selectFirst = false;
-    if (params['sf']) {
-      this.selectFirst = params['sf'] === '1' ? true : false;
+    if (params['sf'] === '1' && this.termDefinedInUrl) {
+      const entities$$ = this.searchStore.entities$
+        .pipe(debounceTime(500), take(1))
+        .subscribe((entities) => {
+          entities$$.unsubscribe();
+          if (entities.length) {
+            this.computeFocusFirst();
+          }
+        });
     }
   }
 
@@ -693,20 +971,22 @@ export class PortalComponent implements OnInit, OnDestroy {
   }
 
   private readLayersQueryParams(params: Params) {
-    if (params['layers'] && params['wmsUrl']) {
-      const layersByService = params['layers'].split('),(');
+    this.readLayersQueryParamsWMS(params);
+    this.readLayersQueryParamsWMTS(params);
+    this.readVectorQueryParams(params);
+  }
+
+  private readLayersQueryParamsWMS(params: Params) {
+    if ((params['layers'] || params['wmsLayers']) && params['wmsUrl']) {
+      const nameParamLayers = params['wmsLayers'] ? 'wmsLayers' : 'layers'; // for maintain compatibility
+      const layersByService = params[nameParamLayers].split('),(');
       const urls = params['wmsUrl'].split(',');
       let cnt = 0;
-      urls.forEach(url => {
-        let currentLayersByService = layersByService[cnt];
-        currentLayersByService = currentLayersByService.startsWith('(')
-          ? currentLayersByService.substr(1)
-          : currentLayersByService;
-        currentLayersByService = currentLayersByService.endsWith(')')
-          ? currentLayersByService.slice(0, -1)
-          : currentLayersByService;
-        currentLayersByService = currentLayersByService.split(',');
-        currentLayersByService.forEach(layer => {
+      urls.forEach((url) => {
+        const currentLayersByService = this.extractLayersByService(
+          layersByService[cnt]
+        );
+        currentLayersByService.forEach((layer) => {
           const layerFromUrl = layer.split(':igoz');
           const layerOptions = {
             url: url,
@@ -716,7 +996,7 @@ export class PortalComponent implements OnInit, OnDestroy {
             layerOptions as WMSDataSourceOptions
           );
           const visibility = this.computeLayerVisibilityFromUrl(params, id);
-          this.addLayerByName(
+          this.addWmsLayerByName(
             url,
             layerFromUrl[0],
             visibility,
@@ -728,7 +1008,87 @@ export class PortalComponent implements OnInit, OnDestroy {
     }
   }
 
-  private addLayerByName(
+  private readLayersQueryParamsWMTS(params: Params) {
+    if (params['wmtsLayers'] && params['wmtsUrl']) {
+      const layersByService = params['wmtsLayers'].split('),(');
+      const urls = params['wmtsUrl'].split(',');
+      let cnt = 0;
+      urls.forEach((url) => {
+        const currentLayersByService = this.extractLayersByService(
+          layersByService[cnt]
+        );
+        currentLayersByService.forEach((layer) => {
+          const layerFromUrl = layer.split(':igoz');
+          const layerOptions = {
+            url: url,
+            layer: layerFromUrl[0]
+          };
+          const id = generateWMTSIdFromSourceOptions(
+            layerOptions as WMTSDataSourceOptions
+          );
+          const visibility = this.computeLayerVisibilityFromUrl(params, id);
+          this.addWmtsLayerByName(
+            url,
+            layerFromUrl[0],
+            visibility,
+            parseInt(layerFromUrl[1] || 1000, 10)
+          );
+        });
+        cnt += 1;
+      });
+    }
+  }
+
+  private readVectorQueryParams(params: Params) {
+    if (params['vector']) {
+      const url = params['vector'] as string;
+      const lastIndex = url.lastIndexOf('/');
+      const fileName = url.slice(lastIndex + 1, url.length);
+
+      this.http.get(`${url}`, { responseType: 'blob' }).subscribe((data) => {
+        const file = new File([data], fileName, {
+          type: data.type,
+          lastModified: Date.now()
+        });
+        this.importService.import(file).subscribe(
+          (features: Feature[]) => this.onFileImportSuccess(file, features),
+          (error: Error) => this.onFileImportError(file, error)
+        );
+      });
+    }
+  }
+
+  private onFileImportSuccess(file: File, features: Feature[]) {
+    handleFileImportSuccess(
+      file,
+      features,
+      this.map,
+      this.messageService,
+      this.languageService
+    );
+  }
+
+  private onFileImportError(file: File, error: Error) {
+    handleFileImportError(
+      file,
+      error,
+      this.messageService,
+      this.languageService
+    );
+  }
+
+  private extractLayersByService(layersByService: string): any[] {
+    let outLayersByService = layersByService;
+    outLayersByService = outLayersByService.startsWith('(')
+      ? outLayersByService.substr(1)
+      : outLayersByService;
+    outLayersByService = outLayersByService.endsWith(')')
+      ? outLayersByService.slice(0, -1)
+      : outLayersByService;
+    return outLayersByService.split(',');
+  }
+
+  private addWmsLayerByName(
     url: string,
     name: string,
     visibility: boolean = true,
@@ -744,15 +1104,45 @@ export class PortalComponent implements OnInit, OnDestroy {
           visible: visibility,
           sourceOptions: {
             optionsFromCapabilities: true,
+            optionsFromApi: true,
             type: 'wms',
             url: url,
             params: {
-              layers: name,
-              version: '1.3.0'
+              layers: name
             }
           }
         })
-        .subscribe(l => {
+        .subscribe((l) => {
+          this.map.addLayer(l);
+        })
+    );
+  }
+
+  private addWmtsLayerByName(
+    url: string,
+    name: string,
+    visibility: boolean = true,
+    zIndex: number = 100000
+  ) {
+    if (!this.contextLoaded) {
+      return;
+    }
+    this.addedLayers$$.push(
+      this.layerService
+        .createAsyncLayer({
+          zIndex: zIndex,
+          visible: visibility,
+          sourceOptions: {
+            optionsFromCapabilities: true,
+            type: 'wmts',
+            url: url,
+            crossOrigin: true,
+            // matrixSet: 'GoogleMapsCompatibleExt2:epsg:3857',
+            version: '1.0.0',
+            layer: name
+          }
+        } as any)
+        .subscribe((l) => {
           this.map.addLayer(l);
         })
     );
@@ -797,5 +1187,33 @@ export class PortalComponent implements OnInit, OnDestroy {
       visible = false;
     }
     return visible;
+  }
+
+  private initWelcomeWindow(): void {
+    const authConfig = this.configService.getConfig('auth');
+    if (authConfig) {
+      this.authService.logged$.subscribe((logged) => {
+        if (logged) {
+          this.createWelcomeWindow();
+        }
+      });
+    } else {
+      this.createWelcomeWindow();
+    }
+  }
+
+  private createWelcomeWindow(): void {
+    if (this.welcomeWindowService.hasWelcomeWindow()) {
+      const welcomWindowConfig: MatDialogConfig = this.welcomeWindowService.getConfig();
+
+      const dialogRef = this.dialogWindow.open(
+        WelcomeWindowComponent,
+        welcomWindowConfig
+      );
+
+      dialogRef.afterClosed().subscribe((result) => {
+        this.welcomeWindowService.afterClosedWelcomeWindow();
+      });
+    }
   }
 }
